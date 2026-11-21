@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { normalizeTeam, withDefaultSkills } from '../core/battle';
 import type { BattleRecord, Card, Team } from '../core/types';
 import { createClaudeStore } from '../storage/claudeStore';
 import { createLocalStore } from '../storage/localStore';
@@ -89,6 +90,36 @@ export function AppProvider({ store, children }: { store: Store; children: React
       u3();
     };
   }, [store]);
+
+  // 既存データの移行：スキル未設定のカードに仮のスキルを、リーダー未設定のチームに仮のリーダーを設定する
+  const migrated = useRef({ cards: false, teams: false });
+  useEffect(() => {
+    if (!loaded.cards || migrated.current.cards) return;
+    migrated.current.cards = true;
+    const old = cards.filter((c) => !c.skill || !c.leaderSkill);
+    if (!old.length) return;
+    (async () => {
+      try {
+        for (const c of old) await store.saveCard(withDefaultSkills(c));
+        toast(`既存のカード${old.length}枚に仮のスキルを設定しました。カードの編集画面から変更できます。`);
+      } catch (e) {
+        toast(errorMessage(e), 'error');
+      }
+    })();
+  }, [loaded.cards, cards, store]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!loaded.teams || migrated.current.teams) return;
+    migrated.current.teams = true;
+    const old = teams.filter((t) => t.leader === undefined);
+    if (!old.length) return;
+    (async () => {
+      try {
+        for (const t of old) await store.saveTeam(normalizeTeam(t));
+      } catch (e) {
+        toast(errorMessage(e), 'error');
+      }
+    })();
+  }, [loaded.teams, teams, store]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toast = useCallback((text: string, tone: 'info' | 'error' = 'info') => {
     const id = ++toastId.current;

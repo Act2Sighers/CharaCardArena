@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { normalizeTeam, teamMemberIds } from '../core/battle';
+import { normalizeTeam, pickLeader, teamMemberIds } from '../core/battle';
 import { ELEMENTS } from '../core/elements';
+import { LEADER_SKILLS } from '../core/skills';
 import type { Card, Team } from '../core/types';
 import { newId } from '../storage/store';
 import { useApp } from './AppContext';
 import { CardFace } from './CardFace';
 import { ConfirmButton, EmptyState } from './common';
+import { Crown } from './SkillPicker';
 
 export const TEAM_MAX = 6;
 const POS = ['左', '中央', '右'];
@@ -57,13 +59,18 @@ export function TeamsPage() {
 }
 
 export function TeamStrip({ team, cardMap }: { team: Team; cardMap: Map<string, Card> }) {
+  const leader = pickLeader(team);
+  const leaderCard = leader ? cardMap.get(leader) : null;
   return (
     <div className="team-strip">
       <div className="team-strip-front">
         {[0, 1, 2].map((i) => {
           const c = team.front[i] ? cardMap.get(team.front[i]!) : null;
           return c ? (
-            <CardFace key={i} name={c.name} element={c.element} imageRef={c.image?.cropped} size="xs" />
+            <span key={i} className="strip-card">
+              <CardFace name={c.name} element={c.element} imageRef={c.image?.cropped} size="xs" />
+              {c.id === leader && <Crown className="strip-crown" />}
+            </span>
           ) : (
             <div key={i} className="slot-empty xs" />
           );
@@ -76,11 +83,18 @@ export function TeamStrip({ team, cardMap }: { team: Team; cardMap: Map<string, 
             const c = cardMap.get(id);
             return c ? (
               <span key={id} className="mini-chip" style={{ ['--el' as string]: ELEMENTS[c.element].color }}>
+                {id === leader && <Crown className="chip-crown" />}
                 {c.name}
               </span>
             ) : null;
           })}
         </div>
+      )}
+      {leaderCard && leaderCard.leaderSkill && (
+        <span className="strip-leader">
+          <Crown className="chip-crown" />
+          {LEADER_SKILLS[leaderCard.leaderSkill].name}
+        </span>
       )}
     </div>
   );
@@ -92,9 +106,15 @@ function TeamEditor({ team, onClose }: { team: Team | null; onClose(): void }) {
   const [front, setFront] = useState<(string | null)[]>(() => [0, 1, 2].map((i) => team?.front[i] ?? null));
   const [reserve, setReserve] = useState<(string | null)[]>(() => [0, 1, 2].map((i) => team?.reserve[i] ?? null));
   const [selected, setSelected] = useState<SlotKey | null>(null);
+  const [leaderPick, setLeaderPick] = useState<string | null>(team?.leader ?? null);
   const [busy, setBusy] = useState(false);
 
   const members = [...front, ...reserve].filter((x): x is string => !!x);
+  const leader = pickLeader({
+    id: '', name: '', front, reserve: reserve.filter((x): x is string => !!x), leader: leaderPick, createdAt: 0, updatedAt: 0,
+  });
+  const leaderCard = leader ? cardMap.get(leader) : null;
+  const leaderInReserve = !!leader && reserve.includes(leader);
   const frontCount = front.filter(Boolean).length;
   const reserveCount = reserve.filter(Boolean).length;
 
@@ -166,6 +186,7 @@ function TeamEditor({ team, onClose }: { team: Team | null; onClose(): void }) {
       name: name.trim() || `チーム${now.toString().slice(-4)}`,
       front,
       reserve: reserve.filter((x): x is string => !!x),
+      leader,
       createdAt: team?.createdAt ?? now,
       updatedAt: now,
     });
@@ -196,6 +217,7 @@ function TeamEditor({ team, onClose }: { team: Team | null; onClose(): void }) {
         aria-label={`${label}${c ? `：${c.name}` : '：空き'}`}
       >
         <span className="slot-label">{label}</span>
+        {c && c.id === leader && <span className="slot-leader"><Crown /> リーダー</span>}
         {c ? (
           <CardFace name={c.name} element={c.element} style={c.style} imageRef={c.image?.cropped} size="sm" />
         ) : (
@@ -235,6 +257,18 @@ function TeamEditor({ team, onClose }: { team: Team | null; onClose(): void }) {
           {selected ? (
             <span className="formation-actions">
               <span className="hint">入れ替える枠を選んでください</span>
+              {get(selected) && get(selected) !== leader && (
+                <button
+                  type="button"
+                  className="btn btn-small btn-leader"
+                  onClick={() => {
+                    setLeaderPick(get(selected));
+                    setSelected(null);
+                  }}
+                >
+                  <Crown /> リーダーにする
+                </button>
+              )}
               <button type="button" className="btn btn-small" onClick={removeSelected}>チームから外す</button>
               <button type="button" className="btn btn-small btn-ghost" onClick={() => setSelected(null)}>選択解除</button>
             </span>
@@ -243,6 +277,19 @@ function TeamEditor({ team, onClose }: { team: Team | null; onClose(): void }) {
           )}
         </div>
         {warn && <p className="hint warn">{warn}</p>}
+        {leaderCard && (
+          <div className="leader-panel">
+            <h3 className="formation-title"><Crown /> リーダー：{leaderCard.name}</h3>
+            <p>
+              <b>「{LEADER_SKILLS[leaderCard.leaderSkill ?? 'king'].name}」</b>
+              {LEADER_SKILLS[leaderCard.leaderSkill ?? 'king'].text}
+            </p>
+            <p className="hint">
+              リーダースキルはリーダーが前線にいる間だけ効き、倒れると消えます。リーダーを変えるには、枠を選んで「リーダーにする」を押します。
+            </p>
+            {leaderInReserve && <p className="hint warn">リーダーが待機にいるので、前線に出るまでリーダースキルは効きません。</p>}
+          </div>
+        )}
       </div>
 
       <h3 className="section-title">カードを入れる <span className="muted">押すと空いている枠に入ります（もう一度押すと外れます）</span></h3>

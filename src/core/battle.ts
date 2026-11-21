@@ -1,13 +1,14 @@
 import { ELEMENTS } from './elements';
 import { teamUnits } from './engine';
+import { DEFAULT_LEADER_SKILL, DEFAULT_SKILL, LEADER_SKILLS, LK, SKILLS } from './skills';
 import { computeStats } from './styles';
 import type {
-  BattleEvent, Card, Side, Team, TeamSnapshot, UnitId, UnitSnapshot,
+  BattleEvent, Card, ElementId, Side, Team, TeamSnapshot, UnitId, UnitSnapshot,
 } from './types';
 
 // ===== チーム → 戦闘用スナップショット =====
 
-export function unitSnapshot(card: Card): UnitSnapshot {
+export function unitSnapshot(card: Card, leader = false): UnitSnapshot {
   return {
     cardId: card.id,
     name: card.name,
@@ -16,7 +17,16 @@ export function unitSnapshot(card: Card): UnitSnapshot {
     tactic: card.tactic,
     imageRef: card.image ? card.image.cropped : null,
     stats: computeStats(card.style),
+    skill: card.skill ?? DEFAULT_SKILL[card.style],
+    leaderSkill: card.leaderSkill ?? DEFAULT_LEADER_SKILL,
+    leader,
   };
+}
+
+/** スキル未設定の古いカードに仮のスキルを補う */
+export function withDefaultSkills(card: Card): Card {
+  if (card.skill && card.leaderSkill) return card;
+  return { ...card, skill: card.skill ?? DEFAULT_SKILL[card.style], leaderSkill: card.leaderSkill ?? DEFAULT_LEADER_SKILL };
 }
 
 export function teamMemberIds(team: Team): string[] {
@@ -24,7 +34,8 @@ export function teamMemberIds(team: Team): string[] {
 }
 
 export function teamSnapshot(team: Team, cards: Map<string, Card>): TeamSnapshot {
-  const get = (id: string | null) => (id && cards.get(id) ? unitSnapshot(cards.get(id)!) : null);
+  const leader = pickLeader(team);
+  const get = (id: string | null) => (id && cards.get(id) ? unitSnapshot(cards.get(id)!, id === leader) : null);
   return {
     name: team.name,
     front: [0, 1, 2].map((i) => get(team.front[i] ?? null)),
@@ -32,14 +43,22 @@ export function teamSnapshot(team: Team, cards: Map<string, Card>): TeamSnapshot
   };
 }
 
-/** 前線に空きがあるのに待機がいる場合、待機を前線に詰める */
+/** リーダーが未設定・チーム外なら、前線中央（いなければ最初のメンバー）をリーダーにする */
+export function pickLeader(team: Team): string | null {
+  const members = teamMemberIds(team);
+  if (team.leader && members.includes(team.leader)) return team.leader;
+  return team.front[1] ?? members[0] ?? null;
+}
+
+/** 前線に空きがあるのに待機がいる場合、待機を前線に詰める。リーダーも補う */
 export function normalizeTeam(team: Team): Team {
   const front = [0, 1, 2].map((i) => team.front[i] ?? null);
   const reserve = [...team.reserve];
   for (let i = 0; i < 3; i++) {
     if (!front[i] && reserve.length) front[i] = reserve.shift()!;
   }
-  return { ...team, front, reserve };
+  const t = { ...team, front, reserve };
+  return { ...t, leader: pickLeader(t) };
 }
 
 // ===== 再生用の状態 =====
@@ -59,6 +78,12 @@ export interface UnitView {
   chilled: boolean;
   endureUsed: boolean;
   gauge: number;
+  charge: number;
+  chargeMax: number;
+  skillSpent: boolean;
+  mimicEl: ElementId | null;
+  inverted: boolean;
+  leader: boolean;
 }
 
 export interface ViewState {
@@ -78,7 +103,12 @@ export function initialView(teamA: TeamSnapshot, teamB: TeamSnapshot): ViewState
         id: x.id, side, snap: x.unit, maxHp: x.unit.stats.hp, hp: x.unit.stats.hp,
         slot: -1, reserveIndex: x.slot < 0 ? r++ : -1, alive: true, entered: false,
         poison: 0, chilled: false, endureUsed: false, gauge: 0,
+        charge: 0, chargeMax: x.unit.skill ? SKILLS[x.unit.skill]?.interval ?? 0 : 0,
+        skillSpent: false, mimicEl: null, inverted: false, leader: !!x.unit.leader,
       };
+      if (x.unit.leader && x.unit.leaderSkill === 'warlord') {
+        units[x.id].maxHp = units[x.id].hp = Math.round(x.unit.stats.hp * (1 + LK.warlord));
+      }
       order.push(x.id);
     }
     // 開始前は前線メンバーもまだ「登場前」だが、位置だけは決めておく
@@ -110,6 +140,40 @@ export function applyEvent(state: ViewState, ev: BattleEvent): ViewState {
     case 'turn': {
       actor = ev.unit;
       for (const [id, g] of Object.entries(ev.gauges)) upd(id, { gauge: g });
+      if (ev.chargeMax) upd(ev.unit, { charge: ev.charge ?? 0, chargeMax: ev.chargeMax });
+      break;
+    }
+    case 'attack':
+      if (!ev.followup && (ev.tag === undefined || ev.tag === 'normal' || ev.tag === 'skill') && ev.unit === actor) {
+        upd(ev.unit, { gauge: 0 });
+      }
+      break;
+    case 'skill':
+      if (ev.unit === actor) {
+        upd(ev.unit, { charge: 0, gauge: 0, ...(ev.skill === 'revive' && !ev.via ? { skillSpent: true } : {}) });
+      }
+      break;
+    case 'gauge':
+      upd(ev.unit, { gauge: ev.value });
+      break;
+    case 'misfire':
+      upd(ev.unit, { charge: 0 });
+      break;
+    case 'buff':
+      if (ev.buff === 'mimic') upd(ev.unit, { mimicEl: ev.on ? ev.element ?? null : null });
+      else upd(ev.unit, { inverted: ev.on });
+      break;
+    case 'revive': {
+      const reserveCount = state.order.filter((id) => {
+        const u = units[id];
+        return u.side === ev.side && !u.entered && u.reserveIndex >= 0 && u.alive;
+      }).length;
+      upd(ev.unit, {
+        alive: true, hp: ev.hp, gauge: 0, poison: 0, chilled: false,
+        ...(ev.slot >= 0
+          ? { slot: ev.slot, entered: true, reserveIndex: -1 }
+          : { slot: -1, entered: false, reserveIndex: reserveCount }),
+      });
       break;
     }
     case 'damage':
@@ -128,7 +192,7 @@ export function applyEvent(state: ViewState, ev: BattleEvent): ViewState {
       upd(ev.unit, { chilled: ev.on });
       break;
     case 'ko':
-      upd(ev.unit, { alive: false, hp: 0, poison: 0, chilled: false, gauge: 0 });
+      upd(ev.unit, { alive: false, hp: 0, poison: 0, chilled: false, gauge: 0, mimicEl: null, inverted: false });
       break;
     case 'end':
       ended = ev;
@@ -158,10 +222,13 @@ export interface LogLine {
   index: number;
   text: string;
   side: Side | null;
-  tone: 'normal' | 'sub' | 'good' | 'bad' | 'system' | 'ko';
+  tone: 'normal' | 'sub' | 'good' | 'bad' | 'system' | 'ko' | 'skill';
 }
 
 const POS = ['左', '中央', '右'];
+const HEAL_LABEL: Record<string, string> = {
+  rain: '恵みの雨：', regen: '再生：', skill: '', nature: '自然治癒：', mercy: '慈愛の導き：',
+};
 
 export function logLines(
   events: BattleEvent[], teamA: TeamSnapshot, teamB: TeamSnapshot,
@@ -190,8 +257,54 @@ export function logLines(
         break;
       case 'attack': {
         const u = v.units[ev.unit];
-        if (ev.followup) push(i, `${name(ev.unit)}の追撃！（${ELEMENTS[u.snap.element].effectName}）`, sideOf(ev.unit), 'normal');
+        const tag = ev.tag ?? (ev.followup ? 'followup' : 'normal');
+        if (tag === 'followup') push(i, `${name(ev.unit)}の追撃！（${ELEMENTS[u.snap.element].effectName}）`, sideOf(ev.unit), 'normal');
+        else if (tag === 'counter') push(i, `${name(ev.unit)}の反撃！（応報） → ${name(ev.target)}`, sideOf(ev.unit), 'normal');
+        else if (tag === 'assist') push(i, `${name(ev.unit)}の援護射撃！ → ${name(ev.target)}`, sideOf(ev.unit), 'normal');
+        else if (tag === 'skill' || tag === 'sweep') push(i, `　→ ${name(ev.target)}`, sideOf(ev.unit), 'normal');
         else push(i, `${name(ev.unit)}の攻撃 → ${name(ev.target)}`, sideOf(ev.unit), 'normal');
+        break;
+      }
+      case 'skill': {
+        const sk = SKILLS[ev.skill].name;
+        let t = ev.via
+          ? `${name(ev.unit)}の「${SKILLS[ev.via].name}」→「${sk}」！`
+          : `${name(ev.unit)}のスキル「${sk}」！`;
+        if (ev.skill === 'mimic' && ev.element && ev.target) t += `（${name(ev.target)}の${ELEMENTS[ev.element].effectName}をまねる）`;
+        if (ev.skill === 'revive' && ev.target) t += `（${name(ev.target)}を蘇らせる）`;
+        push(i, t, sideOf(ev.unit), 'skill');
+        break;
+      }
+      case 'misfire':
+        push(i, `${name(ev.unit)}の「${SKILLS[ev.skill].name}」は不発…　通常攻撃に切り替え、次の行動が早まる`, sideOf(ev.unit), 'sub');
+        break;
+      case 'cover':
+        push(i, `${name(ev.unit)}が${name(ev.target)}をかばった！`, sideOf(ev.unit), 'good');
+        break;
+      case 'gauge': {
+        const label: Partial<Record<typeof ev.reason, string>> = {
+          cheer: `声援：${name(ev.unit)}の行動ゲージが進んだ`,
+          hold: `足止め：${name(ev.unit)}の行動ゲージが0に戻った`,
+          first: `先手必勝：${name(ev.unit)}の行動ゲージが進んだ`,
+          gale: `疾風の号令：${name(ev.unit)}の行動ゲージが進んだ`,
+          relief: `交代の名手：${name(ev.unit)}の行動ゲージが進んだ`,
+          warlord: `総大将を失い、${name(ev.unit)}の行動ゲージが0になった`,
+        };
+        const text = label[ev.reason];
+        if (text) push(i, text, sideOf(ev.unit), ev.reason === 'hold' || ev.reason === 'warlord' ? 'bad' : 'sub');
+        break;
+      }
+      case 'revive':
+        push(i, ev.slot >= 0 ? `${name(ev.unit)}が復活し、${POS[ev.slot]}に立った！` : `${name(ev.unit)}が復活し、待機の最後尾に戻った！`, ev.side, 'good');
+        break;
+      case 'buff':
+        if (ev.buff === 'mimic') {
+          if (!ev.on) push(i, `${name(ev.unit)}のものまねが切れた`, sideOf(ev.unit), 'sub');
+        } else push(i, ev.on ? `${name(ev.unit)}の属性相性が反転した！` : `${name(ev.unit)}の属性相性が元に戻った`, sideOf(ev.unit), ev.on ? 'good' : 'sub');
+        break;
+      case 'leader': {
+        const ls = LEADER_SKILLS[ev.skill].name;
+        push(i, ev.on ? `リーダー${name(ev.unit)}の「${ls}」が有効に！` : `リーダー${name(ev.unit)}が倒れ、「${ls}」の効果が消えた`, sideOf(ev.unit), ev.on ? 'skill' : 'bad');
         break;
       }
       case 'evade':
@@ -201,6 +314,7 @@ export function logLines(
         let t: string;
         if (ev.kind === 'splash') t = `延焼！ ${name(ev.unit)}に${ev.amount}ダメージ`;
         else if (ev.kind === 'poison') t = `${name(ev.unit)}は毒で${ev.amount}ダメージ`;
+        else if (ev.kind === 'cost') t = `${name(ev.unit)}は捨て身でHPを${ev.amount}削った`;
         else {
           t = `${name(ev.unit)}に${ev.amount}ダメージ`;
           if (ev.aff === 'adv') t += '　効果は抜群だ！';
@@ -214,9 +328,7 @@ export function logLines(
       case 'heal':
         push(
           i,
-          ev.kind === 'rain'
-            ? `恵みの雨：${name(ev.unit)}のHPが${ev.amount}回復`
-            : `再生：${name(ev.unit)}のHPが${ev.amount}回復`,
+          `${HEAL_LABEL[ev.kind]}${name(ev.unit)}のHPが${ev.amount}回復`,
           sideOf(ev.unit), 'good',
         );
         break;

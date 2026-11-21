@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ELEMENT_ORDER, ELEMENTS, weakTo } from '../core/elements';
+import { DEFAULT_LEADER_SKILL, DEFAULT_SKILL, LEADER_SKILLS, LeaderSkillId, SKILLS, SkillId } from '../core/skills';
 import { computeStats, STYLE_ORDER, STYLES, TACTIC_ORDER, TACTICS } from '../core/styles';
 import type { Card, CropRect, ElementId, StyleId, TacticId } from '../core/types';
 import { defaultCrop, downscaleOriginal, loadImage, loadImageFromFile, renderCrop } from '../storage/image';
@@ -8,6 +9,7 @@ import { useApp } from './AppContext';
 import { CardFace, ElementBadge, inkOn } from './CardFace';
 import { ConfirmButton, StatBars } from './common';
 import { ImageCropper } from './ImageCropper';
+import { LeaderSkillPicker, SkillPicker, skillKindLabel } from './SkillPicker';
 
 interface PendingImage {
   /** 新しく選んだ元画像（既存の元画像を使い回すときは null） */
@@ -30,6 +32,10 @@ export function CardEditor({ card, onClose }: { card: Card | null; onClose(): vo
   const [style, setStyle] = useState<StyleId>(card?.style ?? 'balance');
   const [tactic, setTactic] = useState<TacticId>(card?.tactic ?? 'rush');
   const [description, setDescription] = useState(card?.description ?? '');
+  const [skill, setSkill] = useState<SkillId>(card?.skill ?? DEFAULT_SKILL[card?.style ?? 'balance']);
+  const [leaderSkill, setLeaderSkill] = useState<LeaderSkillId>(card?.leaderSkill ?? DEFAULT_LEADER_SKILL);
+  // 新規作成中にまだスキルを選んでいなければ、スタイルに合わせたスキルを提案する
+  const [skillTouched, setSkillTouched] = useState(!!card);
   const [pending, setPending] = useState<PendingImage | null>(null);
   const [cropping, setCropping] = useState<PendingImage | null>(null);
   const [busy, setBusy] = useState(false);
@@ -112,7 +118,7 @@ export function CardEditor({ card, onClose }: { card: Card | null; onClose(): vo
       const next: Card = {
         id: card?.id ?? newId(),
         name: trimmed.slice(0, NAME_MAX),
-        element, style, tactic,
+        element, style, tactic, skill, leaderSkill,
         description: description.trim().slice(0, DESC_MAX),
         image,
         createdAt: card?.createdAt ?? now,
@@ -197,6 +203,12 @@ export function CardEditor({ card, onClose }: { card: Card | null; onClose(): vo
             <h3 className="panel-title">能力値 <span className="muted">（スタイルで決まります）</span></h3>
             <StatBars stats={stats} />
           </div>
+          <div className="panel skill-panel">
+            <h3 className="panel-title">スキル「{SKILLS[skill].name}」<span className="muted">{skillKindLabel(skill)}</span></h3>
+            <p>{SKILLS[skill].text}</p>
+            <h3 className="panel-title">リーダースキル「{LEADER_SKILLS[leaderSkill].name}」</h3>
+            <p>{LEADER_SKILLS[leaderSkill].text}</p>
+          </div>
           <div className="panel effect-panel" style={{ ['--el' as string]: el.color }}>
             <h3 className="panel-title">
               <ElementBadge element={element} size="sm" /> 属性効果「{el.effectName}」
@@ -256,7 +268,16 @@ export function CardEditor({ card, onClose }: { card: Card | null; onClose(): vo
               {STYLE_ORDER.map((id) => {
                 const s = STYLES[id];
                 return (
-                  <button key={id} type="button" className={`opt${id === style ? ' on' : ''}`} aria-pressed={id === style} onClick={() => setStyle(id)}>
+                  <button
+                    key={id}
+                    type="button"
+                    className={`opt${id === style ? ' on' : ''}`}
+                    aria-pressed={id === style}
+                    onClick={() => {
+                      setStyle(id);
+                      if (!skillTouched) setSkill(DEFAULT_SKILL[id]);
+                    }}
+                  >
                     <span className="opt-name">{s.name}<small>{s.short}</small></span>
                     <span className="opt-text">{s.text}</span>
                   </button>
@@ -278,6 +299,22 @@ export function CardEditor({ card, onClose }: { card: Card | null; onClose(): vo
                 );
               })}
             </div>
+          </fieldset>
+
+          <fieldset className="field">
+            <legend>スキル <span className="req">必須</span> <span className="muted">戦闘中ずっと持っている技や性質</span></legend>
+            <SkillPicker
+              value={skill}
+              onChange={(id) => {
+                setSkill(id);
+                setSkillTouched(true);
+              }}
+            />
+          </fieldset>
+
+          <fieldset className="field">
+            <legend>リーダースキル <span className="req">必須</span> <span className="muted">チームのリーダーにしたときだけ、前線にいる間チーム全体に効く</span></legend>
+            <LeaderSkillPicker value={leaderSkill} onChange={setLeaderSkill} />
           </fieldset>
 
           <div className="field">

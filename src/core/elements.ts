@@ -30,7 +30,7 @@ export const FX = {
   /** 草: 行動開始時の自己回復（最大HP比） */
   grassRegen: 0.07,
   /** 氷: 凍え中の速さ倍率 */
-  iceSlow: 0.5,
+  iceSlow: 0.55,
   /** 地: 1回で受けるダメージの上限（最大HP比） */
   earthCap: 0.12,
   /** 風: 回避率 */
@@ -41,7 +41,41 @@ export const FX = {
   lightEndure: 0.26,
 } as const;
 
+/** 「本領発揮」「一族の誇り」で強化されたときの値 */
+export const FX_MASTERY = {
+  waterHeal: 0.085,
+  fireSplash: 0.42,
+  thunderChance: 0.72,
+  poisonPerStack: 0.032,
+  grassRegen: 0.105,
+  iceSlow: 0.33,
+  earthCap: 0.09,
+  windEvade: 0.38,
+  lightEndure: 0.5,
+  darkExecute: 1.1,
+} as const;
+
+export type FxKey = keyof typeof FX_MASTERY;
+
+/** 各属性の効果がどの数値を使うか */
+export const ELEMENT_FX_KEY: Record<ElementId, FxKey> = {
+  water: 'waterHeal', fire: 'fireSplash', thunder: 'thunderChance', poison: 'poisonPerStack',
+  grass: 'grassRegen', ice: 'iceSlow', earth: 'earthCap', wind: 'windEvade', light: 'lightEndure', dark: 'darkExecute',
+};
+
 const pct = (v: number) => `${Math.round(v * 100)}%`;
+
+/** 強化時の説明（本領発揮・一族の誇り） */
+export function masteryText(id: ElementId): string {
+  const k = ELEMENT_FX_KEY[id];
+  if (k === 'iceSlow') return `凍えた相手の速さ低下 ${pct(1 - FX.iceSlow)}→${pct(1 - FX_MASTERY.iceSlow)}`;
+  const label: Record<FxKey, string> = {
+    waterHeal: '回復量', fireSplash: '飛び火', thunderChance: '追撃の確率', poisonPerStack: '毒1段階のダメージ',
+    grassRegen: '回復量', iceSlow: '', earthCap: '1回のダメージ上限', windEvade: '回避率',
+    lightEndure: '踏みとどまった後のHP', darkExecute: '最大上昇量',
+  };
+  return `${ELEMENTS[id].effectName}の${label[k]} ${pct(FX[k])}→${pct(FX_MASTERY[k])}`;
+}
 
 export const ELEMENTS: Record<ElementId, ElementInfo> = {
   water: {

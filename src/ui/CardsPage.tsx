@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { ELEMENT_ORDER, ELEMENTS } from '../core/elements';
+import { SKILLS } from '../core/skills';
 import type { Card, ElementId } from '../core/types';
 import { useApp } from './AppContext';
 import { CardFace } from './CardFace';
@@ -56,6 +57,7 @@ export function CardsPage() {
           {shown.map((c) => (
             <button key={c.id} type="button" className="card-tile" onClick={() => setEditing(c)} aria-label={`${c.name}を編集`}>
               <CardFace name={c.name} element={c.element} style={c.style} imageRef={c.image?.cropped} size="md" />
+              <span className="tile-skill">{c.skill ? SKILLS[c.skill].name : '—'}</span>
             </button>
           ))}
         </div>

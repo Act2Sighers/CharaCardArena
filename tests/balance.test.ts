@@ -4,6 +4,7 @@ import { simulate } from '../src/core/engine';
 import { Rng } from '../src/core/rng';
 import { STYLE_ORDER, STYLES, TACTIC_ORDER, TACTICS } from '../src/core/styles';
 import { randomUnit, team, unit } from './helpers';
+import { LEADER_SKILL_ORDER, LEADER_SKILLS, SKILL_ORDER, SKILLS } from '../src/core/skills';
 import type { UnitSnapshot } from '../src/core/types';
 
 // 大量のランダム対戦で、属性・スタイル・戦法ごとの勝率を表示する（調整用）
@@ -21,19 +22,26 @@ it('balance report', () => {
     const size = [3, 3, 4, 5, 6][rng.int(5)];
     const am = Array.from({ length: size }, (_, i) => randomUnit(rng, i));
     const bm = Array.from({ length: size }, (_, i) => randomUnit(rng, i + 10));
-    const r = simulate(team('A', am), team('B', bm), rng.int(1e9));
+    const la = rng.int(Math.min(3, size));
+    const lb = rng.int(Math.min(3, size));
+    const r = simulate(team('A', am, la), team('B', bm, lb), rng.int(1e9));
+    for (const e of r.events) {
+      if (e.t === 'skill') add(`U:${e.via ?? e.skill}`, 1);
+      if (e.t === 'misfire') add(`U:${e.skill}`, 0);
+    }
     total++;
     if (r.reason === 'timeout') timeouts++;
     const turns = r.events.filter((e) => e.t === 'turn').length;
     actions += turns;
     (sizeLen[size] ??= []).push(turns);
     const score = (side: 'A' | 'B') => (r.winner === 'draw' ? 0.5 : r.winner === side ? 1 : 0);
-    const reg = (ms: UnitSnapshot[], s: number) => {
+    const reg = (ms: UnitSnapshot[], s: number, li: number) => {
       for (const m of ms) {
-        add(`E:${m.element}`, s); add(`S:${m.style}`, s); add(`T:${m.tactic}`, s);
+        add(`E:${m.element}`, s); add(`S:${m.style}`, s); add(`T:${m.tactic}`, s); add(`K:${m.skill}`, s);
       }
+      add(`L:${ms[li].leaderSkill}`, s);
     };
-    reg(am, score('A')); reg(bm, score('B'));
+    reg(am, score('A'), la); reg(bm, score('B'), lb);
   }
   const pct = (k: string) => { const s = stat.get(k)!; return ((s.w / s.n) * 100).toFixed(1).padStart(5); };
   const out: string[] = [];
@@ -45,6 +53,13 @@ it('balance report', () => {
   for (const s of STYLE_ORDER) out.push(`${STYLES[s].name} ${pct(`S:${s}`)}`);
   out.push('-- tactic --');
   for (const t of TACTIC_ORDER) out.push(`${TACTICS[t].name} ${pct(`T:${t}`)}`);
+  out.push('-- skill (win% / 発動率) --');
+  for (const k of SKILL_ORDER) {
+    const u = stat.get(`U:${k}`);
+    out.push(`${SKILLS[k].name.padEnd(6, '　')} ${pct(`K:${k}`)}${u ? `   発動${((u.w / u.n) * 100).toFixed(0)}%` : ''}`);
+  }
+  out.push('-- leader --');
+  for (const k of LEADER_SKILL_ORDER) out.push(`${LEADER_SKILLS[k].name.padEnd(6, '　')} ${pct(`L:${k}`)}`);
   console.log(out.join('\n'));
 }, 120000);
 

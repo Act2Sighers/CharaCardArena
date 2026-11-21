@@ -569,7 +569,12 @@ export class FxLayer {
   }
 
   /** 回復 */
-  heal(at: Pt, s: number, kind: 'rain' | 'regen') {
+  heal(at: Pt, s: number, kind: 'rain' | 'regen' | 'skill') {
+    if (kind === 'skill') {
+      this.ring(at, '#b8ffb0', s * 0.2, s * 0.9, 600, 3);
+      this.flash(at, '#8dff9a', s * 0.8, 420);
+      this.burst(at, 22, { speed: [20, 90], max: 1100, size: 4 * s / 90, size2: 0, color: '#c8ffc0', ay: -140, drag: 0.97 });
+    }
     if (kind === 'rain') {
       for (let i = 0; i < (this.reduced ? 8 : 18); i++) {
         this.emit({
@@ -637,6 +642,188 @@ export class FxLayer {
       }, 600);
       this.burst(at, 24, { speed: [80, 260], max: 800, size: 4, size2: 0, color: c.glow, drag: 0.92 });
     }
+  }
+
+  // ===================== スキル関連 =====================
+
+  /** スキル発動時のオーラ */
+  skillAura(at: Pt, s: number, color: string) {
+    this.add((ctx, p) => {
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.translate(at.x, at.y);
+      const r = s * (0.55 + 0.25 * easeOut(p));
+      for (let i = 0; i < 2; i++) {
+        ctx.rotate(p * 3 + i * Math.PI);
+        ctx.strokeStyle = withAlpha(color, 0.8 * (1 - p));
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, r, r * 1.35, 0, 0, Math.PI * 1.2);
+        ctx.stroke();
+      }
+    }, 650);
+    this.burst(at, 18, { speed: [20, 80], max: 900, size: 3, size2: 0, color, ay: -160, drag: 0.97 });
+    this.flash(at, color, s * 0.8, 320);
+  }
+
+  /** 光線（ものまね元から自分へ） */
+  beam(from: Pt, to: Pt, color: string) {
+    this.add((ctx, p) => {
+      ctx.globalCompositeOperation = 'lighter';
+      const t = easeOut(Math.min(1, p * 1.6));
+      ctx.strokeStyle = withAlpha(color, 0.85 * (1 - p));
+      ctx.lineWidth = 3;
+      ctx.setLineDash([6, 6]);
+      ctx.lineDashOffset = -p * 60;
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(lerp(from.x, to.x, t), lerp(from.y, to.y, t));
+      ctx.stroke();
+    }, 600);
+  }
+
+  /** 不発 */
+  misfire(at: Pt, s: number, name: string) {
+    this.burst(at, 12, { speed: [20, 70], max: 800, size: 10 * s / 90, size2: 18 * s / 90, color: 'rgba(150,150,165,1)', shape: 'smoke', alpha: 0.3, add: false, ay: -40 });
+    this.text('不発…', { x: at.x, y: at.y - s * 0.15 }, '#c3c1cf', s * 0.24, { sub: name });
+    this.gaugeUp(at, s, false);
+  }
+
+  /** かばうときの盾 */
+  shield(at: Pt, s: number) {
+    this.add((ctx, p) => {
+      ctx.globalCompositeOperation = 'lighter';
+      const a = p < 0.2 ? p / 0.2 : 1 - (p - 0.2) / 0.8;
+      ctx.translate(at.x, at.y);
+      ctx.strokeStyle = `rgba(255,231,168,${0.9 * a})`;
+      ctx.fillStyle = `rgba(255,220,140,${0.18 * a})`;
+      ctx.lineWidth = 3;
+      const w = s * 0.45;
+      const h = s * 0.6;
+      ctx.beginPath();
+      ctx.moveTo(0, -h);
+      ctx.lineTo(w, -h * 0.6);
+      ctx.lineTo(w * 0.8, h * 0.3);
+      ctx.lineTo(0, h);
+      ctx.lineTo(-w * 0.8, h * 0.3);
+      ctx.lineTo(-w, -h * 0.6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }, 520);
+  }
+
+  /** 行動ゲージ上昇（上向きの矢じり） */
+  gaugeUp(at: Pt, s: number, small: boolean) {
+    const n = small ? 1 : 3;
+    for (let i = 0; i < n; i++) {
+      this.add((ctx, p) => {
+        ctx.globalCompositeOperation = 'lighter';
+        const y = at.y + s * 0.55 - easeOut(p) * s * 0.5;
+        ctx.strokeStyle = withAlpha('#f0d394', 0.9 * (1 - p));
+        ctx.lineWidth = small ? 2 : 3;
+        const w = s * (small ? 0.12 : 0.18);
+        ctx.beginPath();
+        ctx.moveTo(at.x - w, y + w * 0.6);
+        ctx.lineTo(at.x, y);
+        ctx.lineTo(at.x + w, y + w * 0.6);
+        ctx.stroke();
+      }, small ? 350 : 520, i * 90);
+    }
+  }
+
+  /** 行動ゲージ低下 */
+  gaugeDown(at: Pt, s: number) {
+    for (let i = 0; i < 2; i++) {
+      this.add((ctx, p) => {
+        const y = at.y + s * 0.1 + easeOut(p) * s * 0.4;
+        ctx.strokeStyle = `rgba(255,140,128,${0.9 * (1 - p)})`;
+        ctx.lineWidth = 3;
+        const w = s * 0.16;
+        ctx.beginPath();
+        ctx.moveTo(at.x - w, y - w * 0.6);
+        ctx.lineTo(at.x, y);
+        ctx.lineTo(at.x + w, y - w * 0.6);
+        ctx.stroke();
+      }, 520, i * 110);
+    }
+  }
+
+  /** 捨て身（自傷） */
+  cost(at: Pt, s: number) {
+    this.flash(at, '#ff4a3d', s * 0.7, 300);
+    this.burst(at, 16, { speed: [60, 200], max: 600, size: 4 * s / 90, size2: 0, color: '#ff6a5a', drag: 0.9 });
+  }
+
+  /** 復活（不死鳥の炎） */
+  revive(at: Pt, s: number) {
+    this.add((ctx, p) => {
+      ctx.globalCompositeOperation = 'lighter';
+      const a = p < 0.2 ? p / 0.2 : 1 - (p - 0.2) / 0.8;
+      const w = s * 0.6;
+      const g = ctx.createLinearGradient(0, at.y + s, 0, at.y - s * 1.6);
+      g.addColorStop(0, `rgba(255,140,60,${0.7 * a})`);
+      g.addColorStop(0.5, `rgba(255,220,130,${0.6 * a})`);
+      g.addColorStop(1, 'rgba(255,255,220,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(at.x - w, at.y + s * 0.8);
+      ctx.quadraticCurveTo(at.x - w * 0.2, at.y - s * 0.5, at.x, at.y - s * 1.6 * easeOut(p));
+      ctx.quadraticCurveTo(at.x + w * 0.2, at.y - s * 0.5, at.x + w, at.y + s * 0.8);
+      ctx.closePath();
+      ctx.fill();
+    }, 1000);
+    // 羽根
+    for (let i = 0; i < (this.reduced ? 6 : 14); i++) {
+      this.emit({
+        x: at.x + rand(-0.5, 0.5) * s, y: at.y + rand(0, 0.6) * s, vx: rand(-60, 60), vy: rand(-220, -120),
+        max: rand(900, 1300), size: 6 * s / 90, size2: 2, color: i % 2 ? '#ffd27a' : '#ff9a4a', shape: 'leaf', vr: rand(-4, 4), drag: 0.97, ay: 40,
+      });
+    }
+    this.ring(at, '#ffd27a', s * 0.2, s * 1.3, 800, 4);
+    this.screenFlash('#ffcf8a', 260, 0.25);
+  }
+
+  /** ものまね（色の渦） */
+  swirl(at: Pt, s: number, color: string) {
+    for (let i = 0; i < (this.reduced ? 8 : 16); i++) {
+      const a0 = (i / 16) * Math.PI * 2;
+      this.add((ctx, p) => {
+        ctx.globalCompositeOperation = 'lighter';
+        const r = s * 0.8 * (1 - easeIn(p));
+        const a = a0 + p * 6;
+        ctx.fillStyle = withAlpha(color, 0.9);
+        ctx.beginPath();
+        ctx.arc(at.x + Math.cos(a) * r, at.y + Math.sin(a) * r * 1.2, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }, 600);
+    }
+  }
+
+  /** 相性反転（逆回転する2つの弧） */
+  invert(at: Pt, s: number) {
+    this.add((ctx, p) => {
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.translate(at.x, at.y);
+      ctx.lineWidth = 4;
+      ctx.lineCap = 'round';
+      const r = s * 0.55;
+      ctx.strokeStyle = `rgba(231,198,255,${1 - p})`;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, p * 7, p * 7 + 2.4);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(140,220,255,${1 - p})`;
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.75, -p * 7, -p * 7 + 2.4);
+      ctx.stroke();
+    }, 700);
+  }
+
+  /** リーダースキル有効化（王冠の光） */
+  crownBurst(at: Pt, s: number) {
+    const top = { x: at.x, y: at.y - s * 0.75 };
+    this.flash(top, '#ffd76a', s * 0.6, 500);
+    this.ring(top, '#ffe39a', s * 0.1, s * 0.7, 600, 3);
+    this.burst(top, 16, { speed: [40, 160], max: 800, size: 3, size2: 0, color: '#fff1c2', drag: 0.93 });
   }
 
   /** 回避（風） */

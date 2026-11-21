@@ -28,6 +28,7 @@ function randomTeam(cards: Card[], size: number): Team {
     name: 'ランダム編成',
     front: [0, 1, 2].map((i) => picked[i] ?? null),
     reserve: picked.slice(3),
+    leader: picked[Math.floor(Math.random() * Math.min(3, picked.length))] ?? null,
     createdAt: now,
     updatedAt: now,
   };

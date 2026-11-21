@@ -1,3 +1,5 @@
+import type { LeaderSkillId, SkillId } from './skills';
+
 // ===== 基本データ型 =====
 
 export type ElementId =
@@ -30,6 +32,10 @@ export interface Card {
   element: ElementId;
   style: StyleId;
   tactic: TacticId;
+  /** スキル（必須） */
+  skill: SkillId;
+  /** リーダースキル（必須。リーダーのときだけ有効） */
+  leaderSkill: LeaderSkillId;
   description: string;
   image: CardImage | null;
   createdAt: number;
@@ -43,6 +49,8 @@ export interface Team {
   front: (string | null)[];
   /** 待機（登場順） */
   reserve: string[];
+  /** リーダーのカード ID（必須） */
+  leader: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -63,6 +71,10 @@ export interface UnitSnapshot {
   tactic: TacticId;
   imageRef: string | null;
   stats: Stats;
+  /** 以下はエンジン v2 以降（古い履歴には無い） */
+  skill?: SkillId;
+  leaderSkill?: LeaderSkillId;
+  leader?: boolean;
 }
 
 export interface TeamSnapshot {
@@ -81,20 +93,32 @@ export type Affinity = 'adv' | 'dis' | 'neutral';
 
 export type BattleEvent =
   | { t: 'enter'; unit: UnitId; side: Side; slot: number; initial: boolean }
-  | { t: 'turn'; unit: UnitId; gauges: Record<UnitId, number> }
-  | { t: 'attack'; unit: UnitId; target: UnitId; followup: boolean }
+  | { t: 'turn'; unit: UnitId; gauges: Record<UnitId, number>; charge?: number; chargeMax?: number }
+  | { t: 'attack'; unit: UnitId; target: UnitId; followup: boolean; tag?: AttackTag }
   | { t: 'evade'; unit: UnitId; source: UnitId }
   | {
       t: 'damage'; unit: UnitId; source: UnitId | null; amount: number; hp: number;
-      kind: 'attack' | 'followup' | 'splash' | 'poison';
+      kind: DamageKind;
       aff: Affinity; capped: boolean; execute: boolean;
     }
-  | { t: 'heal'; unit: UnitId; source: UnitId; amount: number; hp: number; kind: 'rain' | 'regen' }
+  | { t: 'heal'; unit: UnitId; source: UnitId; amount: number; hp: number; kind: HealKind }
   | { t: 'endure'; unit: UnitId }
   | { t: 'poison'; unit: UnitId; source: UnitId; stacks: number }
   | { t: 'chill'; unit: UnitId; source: UnitId; on: boolean }
   | { t: 'ko'; unit: UnitId }
+  | { t: 'skill'; unit: UnitId; skill: SkillId; via?: SkillId; target?: UnitId; element?: ElementId }
+  | { t: 'misfire'; unit: UnitId; skill: SkillId; gauge: number }
+  | { t: 'cover'; unit: UnitId; target: UnitId }
+  | { t: 'gauge'; unit: UnitId; value: number; reason: GaugeReason }
+  | { t: 'revive'; unit: UnitId; source: UnitId; side: Side; slot: number; hp: number }
+  | { t: 'buff'; unit: UnitId; buff: 'mimic' | 'invert'; on: boolean; element?: ElementId }
+  | { t: 'leader'; unit: UnitId; skill: LeaderSkillId; on: boolean }
   | { t: 'end'; winner: Side | 'draw'; reason: 'wipe' | 'timeout'; scoreA: number; scoreB: number };
+
+export type AttackTag = 'normal' | 'followup' | 'skill' | 'sweep' | 'counter' | 'assist';
+export type DamageKind = 'attack' | 'followup' | 'splash' | 'poison' | 'sweep' | 'counter' | 'assist' | 'cost';
+export type HealKind = 'rain' | 'regen' | 'skill' | 'nature' | 'mercy';
+export type GaugeReason = 'cheer' | 'hold' | 'spirit' | 'first' | 'gale' | 'relief' | 'warlord' | 'misfire';
 
 export interface BattleResult {
   events: BattleEvent[];
