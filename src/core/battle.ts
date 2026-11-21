@@ -123,10 +123,18 @@ export function applyEvent(state: ViewState, ev: BattleEvent): ViewState {
   const upd = (id: UnitId, patch: Partial<UnitView>) => {
     units[id] = { ...units[id], ...patch };
   };
+  /** その位置に残っている（倒れた）カードを盤面から外す。1つの位置に表示されるのは常に最新の1枚だけ */
+  const vacate = (side: Side, slot: number, except: UnitId) => {
+    for (const id of state.order) {
+      const u = units[id];
+      if (id !== except && u.side === side && u.slot === slot && u.entered) upd(id, { slot: -1 });
+    }
+  };
   let actor = state.actor;
   let ended = state.ended;
   switch (ev.t) {
     case 'enter': {
+      vacate(ev.side, ev.slot, ev.unit);
       upd(ev.unit, { slot: ev.slot, entered: true, reserveIndex: -1, gauge: 0 });
       if (!ev.initial) {
         // 残りの待機の順番を繰り上げる
@@ -168,6 +176,7 @@ export function applyEvent(state: ViewState, ev: BattleEvent): ViewState {
         const u = units[id];
         return u.side === ev.side && !u.entered && u.reserveIndex >= 0 && u.alive;
       }).length;
+      if (ev.slot >= 0) vacate(ev.side, ev.slot, ev.unit);
       upd(ev.unit, {
         alive: true, hp: ev.hp, gauge: 0, poison: 0, chilled: false,
         ...(ev.slot >= 0
@@ -360,4 +369,10 @@ export function logLines(
     }
   });
   return lines;
+}
+
+/** その位置に表示するカード（生きているカードを優先し、いなければ最後にそこで倒れたカード） */
+export function slotOccupant(view: ViewState, side: Side, slot: number): UnitView | null {
+  const cands = view.order.map((id) => view.units[id]).filter((u) => u.side === side && u.slot === slot && u.entered);
+  return cands.find((u) => u.alive) ?? cands[cands.length - 1] ?? null;
 }

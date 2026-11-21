@@ -2,7 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { teamMemberIds, teamSnapshot } from '../core/battle';
 import { ENGINE_VERSION, simulate } from '../core/engine';
 import { randomSeed } from '../core/rng';
-import type { BattleRecord, Card, Team, TeamSnapshot } from '../core/types';
+import { randomTeam } from '../core/random';
+import type { BattleRecord, TeamSnapshot } from '../core/types';
 import { newId } from '../storage/store';
 import { useApp } from './AppContext';
 import { BattleViewer } from './BattleViewer';
@@ -10,29 +11,6 @@ import { EmptyState } from './common';
 import { TeamStrip } from './TeamsPage';
 
 type Opponent = { kind: 'team'; id: string } | { kind: 'random' };
-
-function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-function randomTeam(cards: Card[], size: number): Team {
-  const picked = shuffle(cards).slice(0, size).map((c) => c.id);
-  const now = Date.now();
-  return {
-    id: 'random',
-    name: 'ランダム編成',
-    front: [0, 1, 2].map((i) => picked[i] ?? null),
-    reserve: picked.slice(3),
-    leader: picked[Math.floor(Math.random() * Math.min(3, picked.length))] ?? null,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
 
 export function BattlePage() {
   const { teams, cards, cardMap, battles, saveBattle, store, run, loaded } = useApp();
@@ -64,7 +42,7 @@ export function BattlePage() {
 
   const start = () => {
     if (!teamA || !opp) return;
-    const teamB = opp.kind === 'team' ? teams.find((t) => t.id === opp.id) : randomTeam(cards, sizeA);
+    const teamB = opp.kind === 'team' ? teams.find((t) => t.id === opp.id) : randomTeam(cards, sizeA, teamMemberIds(teamA));
     if (!teamB) return;
     const snapA: TeamSnapshot = teamSnapshot(teamA, cardMap);
     const snapB: TeamSnapshot = teamSnapshot(teamB, cardMap);
@@ -148,7 +126,9 @@ export function BattlePage() {
                   <p className="hint">
                     {cards.length < sizeA
                       ? `カードが${sizeA}枚以上必要です。`
-                      : '手持ちのカードから、開始時にランダムで選んで並べます。'}
+                      : cards.length >= sizeA * 2 + 2
+                        ? `手持ちのカードから、${teamA.name}にいないカードをランダムで選んで並べます（リーダーもランダム）。`
+                        : '手持ちのカードから、開始時にランダムで選んで並べます（リーダーもランダム）。'}
                   </p>
                 </button>
                 {candidates.map((t) => (

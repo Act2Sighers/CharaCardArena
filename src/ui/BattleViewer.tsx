@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { applyEvent, initialView, logLines, stepStarts, UnitView, ViewState } from '../core/battle';
+import { applyEvent, initialView, logLines, slotOccupant, stepStarts, UnitView, ViewState } from '../core/battle';
 import { ELEMENTS } from '../core/elements';
 import type { BattleEvent, Side, TeamSnapshot, UnitId } from '../core/types';
 import { FLIGHT_MS, FxLayer, Pt } from '../fx/fx';
@@ -117,6 +117,7 @@ export function BattleViewer({ teamA, teamB, events, onClose, live, favorite, on
   const cardEls = useRef(new Map<UnitId, HTMLElement>());
   const lastTarget = useRef<UnitId | null>(null);
   const logRef = useRef<HTMLOListElement>(null);
+  const pendingFx = useRef<{ ev: BattleEvent; view: ViewState }[]>([]);
   const viewRef = useRef(view);
   viewRef.current = view;
 
@@ -195,8 +196,7 @@ export function BattleViewer({ teamA, teamB, events, onClose, live, favorite, on
     const unit = (id: UnitId) => v.units[id];
     switch (ev.t) {
       case 'enter': {
-        // 新しく登場したカードは描画後に位置が決まるので少し待つ
-        requestAnimationFrame(() => {
+        {
           const c = center(ev.unit);
           if (c) fx.enter(c.p, c.s, unit(ev.unit).snap.element, ev.initial);
           animate(ev.unit, [
@@ -204,7 +204,7 @@ export function BattleViewer({ teamA, teamB, events, onClose, live, favorite, on
             { transform: 'scale(1.06)', opacity: 1, filter: 'brightness(1.6)', offset: 0.6 },
             { transform: 'scale(1)', opacity: 1, filter: 'brightness(1)' },
           ], ev.initial ? 420 : 650);
-        });
+        }
         break;
       }
       case 'attack': {
@@ -367,16 +367,14 @@ export function BattleViewer({ teamA, teamB, events, onClose, live, favorite, on
       case 'revive': {
         const src = center(ev.source);
         if (src) fx.text('蘇生', { x: src.p.x, y: src.p.y - src.s * 0.3 }, '#ffe39a', src.s * 0.3);
-        requestAnimationFrame(() => {
-          const c = ev.slot >= 0 ? center(ev.unit) : src;
-          if (c) fx.revive(c.p, c.s);
-          if (ev.slot >= 0) {
-            animate(ev.unit, [
-              { transform: 'translateY(30px) scale(0.8)', opacity: 0, filter: 'brightness(3)' },
-              { transform: 'translateY(0) scale(1)', opacity: 1, filter: 'brightness(1)' },
-            ], 800);
-          }
-        });
+        const c = ev.slot >= 0 ? center(ev.unit) : src;
+        if (c) fx.revive(c.p, c.s);
+        if (ev.slot >= 0) {
+          animate(ev.unit, [
+            { transform: 'translateY(30px) scale(0.8)', opacity: 0, filter: 'brightness(3)' },
+            { transform: 'translateY(0) scale(1)', opacity: 1, filter: 'brightness(1)' },
+          ], 800);
+        }
         break;
       }
       case 'buff': {
@@ -421,11 +419,20 @@ export function BattleViewer({ teamA, teamB, events, onClose, live, favorite, on
       const next = applyEvent(viewRef.current, ev);
       setView(next);
       setIdx(idx + 1);
-      visualize(ev, next);
+      // 演出は盤面の描画（登場したカードの配置）が終わってから行う
+      pendingFx.current.push({ ev, view: next });
     }, wait / speed);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, idx, speed, events]);
+
+  // 描画の確定直後（画面に映る前）に、たまっている演出を実行する
+  useLayoutEffect(() => {
+    const list = pendingFx.current;
+    pendingFx.current = [];
+    for (const x of list) visualize(x.ev, x.view);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idx]);
 
   useEffect(() => {
     if (idx >= events.length) setPlaying(false);
@@ -438,6 +445,7 @@ export function BattleViewer({ teamA, teamB, events, onClose, live, favorite, on
       v = applyEvent(v, events[i]);
     }
     fxRef.current?.clear();
+    pendingFx.current = [];
     setCutin(null);
     setView(v);
     setIdx(to);
@@ -458,10 +466,7 @@ export function BattleViewer({ teamA, teamB, events, onClose, live, favorite, on
 
   const shownLines = lines.filter((l) => l.index < idx);
 
-  const slotUnit = (side: Side, slot: number): UnitView | null => {
-    const cands = view.order.map((id) => view.units[id]).filter((u) => u.side === side && u.slot === slot && u.entered);
-    return cands.find((u) => u.alive) ?? cands[cands.length - 1] ?? null;
-  };
+  const slotUnit = (side: Side, slot: number): UnitView | null => slotOccupant(view, side, slot);
 
   const reserveList = (side: Side) =>
     view.order
