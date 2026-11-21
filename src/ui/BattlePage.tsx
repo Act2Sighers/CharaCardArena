@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { teamMemberIds, teamSnapshot } from '../core/battle';
+import { stripVoices, teamMemberIds, teamSnapshot } from '../core/battle';
 import { ENGINE_VERSION, simulate } from '../core/engine';
 import { randomSeed } from '../core/rng';
 import { randomTeam } from '../core/random';
@@ -53,8 +53,8 @@ export function BattlePage() {
       createdAt: Date.now(),
       seed,
       engineVersion: ENGINE_VERSION,
-      teamA: snapA,
-      teamB: snapB,
+      teamA: stripVoices(snapA),
+      teamB: stripVoices(snapB),
       winner: result.winner,
       reason: result.reason,
       events: result.events,

@@ -2,12 +2,13 @@ import { affinity, AFF_ADV, AFF_DIS, ELEMENT_FX_KEY, FX, FX_MASTERY, FxKey } fro
 import { Rng } from './rng';
 import { isActive, LK, SK, SKILLS, SkillId } from './skills';
 import { STYLES } from './styles';
+import { linesOf, TimingId, VK } from './voice';
 import type {
   Affinity, AttackTag, BattleEvent, BattleResult, DamageKind, ElementId, GaugeReason, HealKind,
   Side, TeamSnapshot, UnitId, UnitSnapshot,
 } from './types';
 
-export const ENGINE_VERSION = 2;
+export const ENGINE_VERSION = 3;
 
 /** 行動ゲージの満タン値 */
 const GAUGE_FULL = 1000;
@@ -45,6 +46,8 @@ export interface Unit {
   mimicTurns: number;
   invertTurns: number;
   leader: boolean;
+  /** HP の色変化の台詞を言ったか（0: まだ / 1: 60%済み / 2: 30%済み） */
+  hpMark: number;
 }
 
 /** チームのユニット一覧（前線→待機の順）。ID は前線の空き枠を詰めて振る */
@@ -78,7 +81,7 @@ export function simulate(teamA: TeamSnapshot, teamB: TeamSnapshot, seed: number)
         id: x.id, side, snap: x.unit, maxHp, hp: maxHp,
         gauge: 0, slot: x.slot, alive: true, poison: 0, chilled: false, chillPower: 1, endureUsed: false,
         skill: x.unit.skill ?? null, charge: 0, skillSpent: false, actions: 0, firstBonus: 0,
-        focusTarget: null, focusStacks: 0, mimicEl: null, mimicTurns: 0, invertTurns: 0, leader: isLeader,
+        focusTarget: null, focusStacks: 0, mimicEl: null, mimicTurns: 0, invertTurns: 0, leader: isLeader, hpMark: 0,
       };
       units.push(u);
       if (isLeader) leaders[side] = u;
@@ -169,10 +172,88 @@ export function simulate(teamA: TeamSnapshot, teamB: TeamSnapshot, seed: number)
     gaugeEv(u, reason);
   };
 
+  // ===== 台詞 =====
+  // 戦闘の乱数とは別の乱数を使うので、台詞の有無で戦闘の展開は変わらない
+  const vrng = new Rng((seed ^ 0x5bd1e995) >>> 0);
+  const carry = new Map<Unit, number>();
+  const spokeThisTurn = new Set<Unit>();
+  let anySpokeThisTurn = false;
+  const pendingLastOne = new Set<Unit>();
+
+  type Cand = { u: Unit; timings: TimingId[]; union?: boolean };
+  /**
+   * 発話の機会。候補はそのタイミングに台詞を登録しているカードだけなので、
+   * 台詞の無いカードが機会を取って無言で終わることはない。1 つの機会で喋るのは最大 1 人。
+   */
+  const speak = (cands: Cand[], opts: { mandatory?: boolean; frequent?: boolean } = {}) => {
+    if (opts.frequent && anySpokeThisTurn) return;
+    // 直前に誰かが喋り始めたばかり（間に何も起きていない）なら、同じ瞬間とみなして見送る
+    if (!opts.mandatory && events[events.length - 1]?.t === 'speak') return;
+    const options: { u: Unit; pool: { t: TimingId; text: string }[] }[] = [];
+    for (const c of cands) {
+      const voice = c.u.snap.voice;
+      if (!voice) continue;
+      if (!opts.mandatory && spokeThisTurn.has(c.u)) continue;
+      let pool: { t: TimingId; text: string }[] = [];
+      if (c.union) {
+        pool = c.timings.flatMap((t) => linesOf(voice, t).map((text) => ({ t, text })));
+      } else {
+        for (const t of c.timings) {
+          const l = linesOf(voice, t);
+          if (l.length) {
+            pool = l.map((text) => ({ t, text }));
+            break;
+          }
+        }
+      }
+      if (pool.length && !options.some((o) => o.u === c.u)) options.push({ u: c.u, pool });
+    }
+    if (!options.length) return;
+    let chosen: (typeof options)[number];
+    if (opts.mandatory) {
+      chosen = vrng.weighted(options, (o) => VK.weight[o.u.snap.voice!.freq]);
+    } else {
+      const passed = options.filter((o) => {
+        const p = VK.prob[o.u.snap.voice!.freq] * (opts.frequent ? VK.frequentFactor : 1) + (carry.get(o.u) ?? 0);
+        return vrng.chance(p);
+      });
+      if (!passed.length) return;
+      chosen = vrng.pick(passed);
+      for (const o of passed) {
+        if (o !== chosen) carry.set(o.u, Math.min(VK.carryMax, (carry.get(o.u) ?? 0) + VK.carry));
+      }
+    }
+    carry.set(chosen.u, 0);
+    const line = vrng.pick(chosen.pool);
+    events.push({ t: 'speak', unit: chosen.u.id, timing: line.t, text: line.text });
+    spokeThisTurn.add(chosen.u);
+    anySpokeThisTurn = true;
+  };
+  const speakOne = (u: Unit, timings: TimingId[], frequent = false) => speak([{ u, timings }], { frequent });
+  const elementMoment = (u: Unit) => {
+    if (u.alive) speakOne(u, ['element'], true);
+  };
+  const resetHpMark = (u: Unit) => {
+    const r = u.hp / u.maxHp;
+    u.hpMark = r < 0.3 ? 2 : r < 0.6 ? 1 : 0;
+  };
+  /** 登場時の台詞（最後の1人 > リーダースキル > 登場 > 先手必勝の順に優先） */
+  const enterMoment = (u: Unit) => {
+    const ts: TimingId[] = [];
+    if (pendingLastOne.has(u)) {
+      ts.push('last_one');
+      pendingLastOne.delete(u);
+    }
+    if (u.leader && u.snap.leaderSkill) ts.push('leader');
+    ts.push('enter');
+    if (has(u, 'first_strike')) ts.push('skill');
+    speakOne(u, ts);
+  };
+
   const pendingSlots: { side: Side; slot: number }[] = [];
   const dead: Unit[] = [];
 
-  const ko = (u: Unit) => {
+  const ko = (u: Unit, source: Unit | null) => {
     u.alive = false;
     events.push({ t: 'ko', unit: u.id });
     pendingSlots.push({ side: u.side, slot: u.slot });
@@ -192,6 +273,14 @@ export function simulate(teamA: TeamSnapshot, teamB: TeamSnapshot, seed: number)
         }
       }
     }
+    // 退場の機会：本人・前線の味方・倒した相手、最後の1人になった味方が取り合う
+    const cands: Cand[] = [{ u, timings: ['self_ko'] }];
+    const survivors = units.filter((x) => x.side === u.side && x.alive);
+    const lastOne = survivors.length === 1 ? survivors[0] : null;
+    if (lastOne && lastOne.slot < 0) pendingLastOne.add(lastOne);
+    for (const a of onField(u.side)) cands.push({ u: a, timings: a === lastOne ? ['last_one', 'ally_ko'] : ['ally_ko'] });
+    if (source && source.alive && source.side !== u.side) cands.push({ u: source, timings: ['kill'] });
+    speak(cands);
   };
 
   /** ダメージを適用（地の上限・光の加護・撃破を処理）。実際に与えた量を返す */
@@ -223,8 +312,23 @@ export function simulate(teamA: TeamSnapshot, teamB: TeamSnapshot, seed: number)
       t: 'damage', unit: target.id, source: source ? source.id : null, amount: dmg,
       hp: target.hp, kind, aff, capped, execute,
     });
-    if (endured) events.push({ t: 'endure', unit: target.id });
-    if (target.hp <= 0) ko(target);
+    if (endured) {
+      events.push({ t: 'endure', unit: target.id });
+      speakOne(target, ['endure']);
+      resetHpMark(target);
+    } else if (target.hp > 0 && kind !== 'cost') {
+      const r = target.hp / target.maxHp;
+      if (target.hpMark < 2 && r < 0.3) {
+        target.hpMark = 2;
+        speakOne(target, ['hp30']);
+      } else if (target.hpMark < 1 && r < 0.6) {
+        target.hpMark = 1;
+        speakOne(target, ['hp60']);
+      }
+      if (capped) elementMoment(target);
+      speakOne(target, ['hurt'], true);
+    }
+    if (target.hp <= 0) ko(target, source);
     return dmg;
   };
 
@@ -233,6 +337,8 @@ export function simulate(teamA: TeamSnapshot, teamB: TeamSnapshot, seed: number)
     if (a <= 0) return;
     target.hp += a;
     events.push({ t: 'heal', unit: target.id, source: source.id, amount: a, hp: target.hp, kind });
+    if (source !== target) speakOne(target, ['healed'], true);
+    if (kind === 'rain' || kind === 'regen') elementMoment(source);
   };
 
   // ===== 狙う相手 =====
@@ -289,6 +395,7 @@ export function simulate(teamA: TeamSnapshot, teamB: TeamSnapshot, seed: number)
       if (guards.length && rng.chance(SK.cover)) {
         const g = rng.pick(guards);
         events.push({ t: 'cover', unit: g.id, target: target.id });
+        speakOne(g, ['skill']);
         target = g;
         covered = true;
       }
@@ -296,6 +403,7 @@ export function simulate(teamA: TeamSnapshot, teamB: TeamSnapshot, seed: number)
     events.push({ t: 'attack', unit: actor.id, target: target.id, followup: tag === 'followup', tag });
     if (hasEl(target, 'wind') && rng.chance(fxv(target, 'wind'))) {
       events.push({ t: 'evade', unit: target.id, source: actor.id });
+      elementMoment(target);
       return target;
     }
     const aff = affOf(actor, target);
@@ -326,18 +434,22 @@ export function simulate(teamA: TeamSnapshot, teamB: TeamSnapshot, seed: number)
     const targetSlot = target.slot;
     const kind: DamageKind = tag === 'normal' || tag === 'skill' ? 'attack' : tag;
     applyDamage(target, dmg, kind, actor, aff, execute);
+    if (execute) elementMoment(actor);
 
     if (target.alive && hasEl(actor, 'poison') && target.poison < FX.poisonMax) {
       target.poison += 1;
       events.push({ t: 'poison', unit: target.id, source: actor.id, stacks: target.poison });
+      elementMoment(actor);
     }
     if (target.alive && hasEl(actor, 'ice') && !target.chilled) {
       target.chilled = true;
       target.chillPower = fxv(actor, 'ice');
       events.push({ t: 'chill', unit: target.id, source: actor.id, on: true });
+      elementMoment(actor);
     }
     if (hasEl(actor, 'fire') && tag !== 'sweep') {
       const ns = onField(target.side).filter((u) => u !== target && Math.abs(u.slot - targetSlot) === 1);
+      if (ns.length) elementMoment(actor);
       for (const n of ns) applyDamage(n, rawForSplash * fxv(actor, 'fire'), 'splash', actor, 'neutral', false);
     }
     // 闘志：味方が攻撃を受けるたび
@@ -347,6 +459,7 @@ export function simulate(teamA: TeamSnapshot, teamB: TeamSnapshot, seed: number)
     // 応報：反撃（反撃に対しては反撃しない）
     if (tag !== 'counter' && target.alive && has(target, 'retaliate') && actor.alive && actor.slot >= 0
       && rng.chance(SK.retaliateChance)) {
+      speakOne(target, ['skill']);
       strike(target, actor, SK.retaliatePower, 'counter');
     }
     return target;
@@ -355,19 +468,23 @@ export function simulate(teamA: TeamSnapshot, teamB: TeamSnapshot, seed: number)
   /** 単体攻撃の後に続く追撃（雷の追撃・援護射撃） */
   const afterStrike = (actor: Unit, target: Unit, tag: AttackTag) => {
     if (actor.alive && target.alive && hasEl(actor, 'thunder') && rng.chance(fxv(actor, 'thunder'))) {
+      elementMoment(actor);
       strike(actor, target, FX.thunderPower, 'followup');
     }
     if (tag === 'normal' || tag === 'skill') {
       for (const n of actor.slot >= 0 ? neighbors(actor) : []) {
         if (target.alive && has(n, 'support_fire') && rng.chance(SK.supportChance)) {
+          speakOne(n, ['skill']);
           strike(n, target, SK.supportPower, 'assist');
         }
       }
     }
   };
 
-  const normalAttack = (actor: Unit) => {
-    const t = strike(actor, chooseTarget(actor), 1, 'normal');
+  const normalAttack = (actor: Unit, talk = true) => {
+    const t0 = chooseTarget(actor);
+    if (talk) speakOne(actor, ['attack']);
+    const t = strike(actor, t0, 1, 'normal');
     afterStrike(actor, t, 'normal');
   };
 
@@ -399,8 +516,10 @@ export function simulate(teamA: TeamSnapshot, teamB: TeamSnapshot, seed: number)
   };
 
   const execSkill = (actor: Unit, s: SkillId, via?: SkillId) => {
-    const announce = (extra: Partial<{ target: UnitId; element: ElementId }> = {}) =>
+    const announce = (extra: Partial<{ target: UnitId; element: ElementId }> = {}) => {
       events.push({ t: 'skill', unit: actor.id, skill: s, ...(via ? { via } : {}), ...extra });
+      speakOne(actor, ['skill']);
+    };
     switch (s) {
       case 'heal_hand': {
         const list = lowAllies(actor, SK.healHandBelow);
@@ -440,7 +559,10 @@ export function simulate(teamA: TeamSnapshot, teamB: TeamSnapshot, seed: number)
           reserves[actor.side].push(t);
         }
         events.push({ t: 'revive', unit: t.id, source: actor.id, side: t.side, slot: t.slot, hp: t.hp });
-        if (t.slot >= 0) onEnter(t, false);
+        if (t.slot >= 0) {
+          onEnter(t, false);
+          enterMoment(t);
+        }
         actor.skillSpent = true;
         break;
       }
@@ -513,6 +635,7 @@ export function simulate(teamA: TeamSnapshot, teamB: TeamSnapshot, seed: number)
 
   // ===== 登場 =====
   const onEnter = (u: Unit, initial: boolean) => {
+    resetHpMark(u);
     if (leaderSkill(u.side) === 'strategist' && u.skill && isActive(u.skill)) u.charge = Math.max(u.charge, intervalOf(u) - 1);
     if (leaderSkill(u.side) === 'relief') u.firstBonus = Math.max(u.firstBonus, LK.reliefBase);
     if (has(u, 'first_strike')) {
@@ -535,18 +658,19 @@ export function simulate(teamA: TeamSnapshot, teamB: TeamSnapshot, seed: number)
 
   const fillSlots = () => {
     pendingSlots.sort((a, b) => (a.side === b.side ? a.slot - b.slot : a.side < b.side ? -1 : 1));
-    const entered: Unit[] = [];
-    for (const p of pendingSlots) {
+    // 1 体ずつ「登場 → 登場時の効果 → 登場時の台詞」の順に進める（台詞の開始が重ならないように）
+    const list = [...pendingSlots];
+    pendingSlots.length = 0;
+    for (const p of list) {
       if (onField(p.side).some((u) => u.slot === p.slot)) continue;
       const next = reserves[p.side].shift();
       if (!next) continue;
       next.slot = p.slot;
       next.gauge = 0;
       events.push({ t: 'enter', unit: next.id, side: next.side, slot: p.slot, initial: false });
-      entered.push(next);
+      onEnter(next, false);
+      enterMoment(next);
     }
-    pendingSlots.length = 0;
-    for (const u of entered) onEnter(u, false);
   };
 
   const sizeTotal = units.length;
@@ -561,6 +685,7 @@ export function simulate(teamA: TeamSnapshot, teamB: TeamSnapshot, seed: number)
   };
 
   const finish = (winner: Side | 'draw', reason: 'wipe' | 'timeout'): BattleResult => {
+    if (winner !== 'draw') speak(onField(winner).map((u) => ({ u, timings: ['victory'] as TimingId[] })), { mandatory: true });
     events.push({
       t: 'end', winner, reason,
       scoreA: Math.round(score('A') * 1000) / 1000,
@@ -581,6 +706,11 @@ export function simulate(teamA: TeamSnapshot, teamB: TeamSnapshot, seed: number)
     events.push({ t: 'enter', unit: u.id, side: u.side, slot: u.slot, initial: true });
   }
   for (const u of starters) onEnter(u, true);
+  // 戦闘開始時：両チームの前線から 1 人（リーダーはリーダースキル発動時の台詞も候補）
+  speak(
+    starters.map((u) => ({ u, timings: (u.leader ? ['start', 'leader'] : ['start']) as TimingId[], union: true })),
+    { mandatory: true },
+  );
 
   for (;;) {
     // 次に行動するユニットを決める
@@ -608,6 +738,8 @@ export function simulate(teamA: TeamSnapshot, teamB: TeamSnapshot, seed: number)
       ...(usesCharge ? { charge: actor.charge, chargeMax: interval } : {}),
     });
     actor.gauge = 0;
+    spokeThisTurn.clear();
+    anySpokeThisTurn = false;
 
     if (actor.chilled) {
       actor.chilled = false;
@@ -628,7 +760,8 @@ export function simulate(teamA: TeamSnapshot, teamB: TeamSnapshot, seed: number)
           t: 'misfire', unit: actor.id, skill: actor.skill!,
           gauge: SK.misfireGauge * (leaderSkill(actor.side) === 'strategist' ? 2 : 1),
         });
-        normalAttack(actor);
+        speakOne(actor, ['misfire']);
+        normalAttack(actor, false);
       }
     } else {
       normalAttack(actor);

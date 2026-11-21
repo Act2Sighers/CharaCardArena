@@ -9,6 +9,7 @@ import { useApp } from './AppContext';
 import { CardFace, ElementBadge, inkOn } from './CardFace';
 import { ConfirmButton, StatBars } from './common';
 import { ImageCropper } from './ImageCropper';
+import { countLines } from '../core/voice';
 import { LeaderSkillPicker, SkillPicker, skillKindLabel } from './SkillPicker';
 
 interface PendingImage {
@@ -25,7 +26,7 @@ interface PendingImage {
 export const NAME_MAX = 16;
 export const DESC_MAX = 120;
 
-export function CardEditor({ card, onClose }: { card: Card | null; onClose(): void }) {
+export function CardEditor({ card, onClose, onOpenVoice }: { card: Card | null; onClose(): void; onOpenVoice?(): void }) {
   const { store, run, toast, imageInUse, teams } = useApp();
   const [name, setName] = useState(card?.name ?? '');
   const [element, setElement] = useState<ElementId>(card?.element ?? 'fire');
@@ -121,6 +122,8 @@ export function CardEditor({ card, onClose }: { card: Card | null; onClose(): vo
         element, style, tactic, skill, leaderSkill,
         description: description.trim().slice(0, DESC_MAX),
         image,
+        // 台詞は別画面で編集するので、保存済みの内容をそのまま引き継ぐ
+        ...(card?.voice ? { voice: card.voice } : {}),
         createdAt: card?.createdAt ?? now,
         updatedAt: now,
       };
@@ -166,6 +169,12 @@ export function CardEditor({ card, onClose }: { card: Card | null; onClose(): vo
       <div className="editor-head">
         <button type="button" className="btn btn-ghost" onClick={onClose}>← 一覧へ</button>
         <h2>{card ? 'カードを編集' : '新しいカード'}</h2>
+        <span className="spacer" />
+        {card ? (
+          <button type="button" className="btn btn-small" onClick={onOpenVoice}>台詞を編集（{countLines(card.voice)}件）</button>
+        ) : (
+          <span className="hint">台詞は保存後に登録できます</span>
+        )}
       </div>
       <div className="editor-body">
         <section className="editor-preview" aria-label="プレビュー">

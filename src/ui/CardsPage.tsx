@@ -5,17 +5,38 @@ import type { Card, ElementId } from '../core/types';
 import { useApp } from './AppContext';
 import { CardFace } from './CardFace';
 import { CardEditor } from './CardEditor';
+import { VoiceEditor } from './VoiceEditor';
+import { countLines } from '../core/voice';
 import { EmptyState } from './common';
 
 export function CardsPage() {
   const { cards, loaded } = useApp();
   const [editing, setEditing] = useState<Card | 'new' | null>(null);
+  const [voiceId, setVoiceId] = useState<string | null>(null);
+  const { cardMap } = useApp();
   const [filter, setFilter] = useState<ElementId | 'all'>('all');
 
   const shown = useMemo(() => (filter === 'all' ? cards : cards.filter((c) => c.element === filter)), [cards, filter]);
 
+  const voiceCard = voiceId ? cardMap.get(voiceId) : null;
   if (editing) {
-    return <CardEditor card={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />;
+    const latest = editing === 'new' ? null : cardMap.get(editing.id) ?? editing;
+    // 台詞画面を開いている間もカード編集画面は残しておき、編集途中の内容を失わないようにする
+    return (
+      <>
+        <div hidden={!!voiceCard}>
+          <CardEditor
+            card={latest}
+            onClose={() => setEditing(null)}
+            onOpenVoice={latest ? () => setVoiceId(latest.id) : undefined}
+          />
+        </div>
+        {voiceCard && <VoiceEditor key={voiceCard.id} card={voiceCard} onClose={() => setVoiceId(null)} />}
+      </>
+    );
+  }
+  if (voiceCard) {
+    return <VoiceEditor key={voiceCard.id} card={voiceCard} onClose={() => setVoiceId(null)} />;
   }
 
   return (
@@ -57,7 +78,10 @@ export function CardsPage() {
           {shown.map((c) => (
             <button key={c.id} type="button" className="card-tile" onClick={() => setEditing(c)} aria-label={`${c.name}を編集`}>
               <CardFace name={c.name} element={c.element} style={c.style} imageRef={c.image?.cropped} size="md" />
-              <span className="tile-skill">{c.skill ? SKILLS[c.skill].name : '—'}</span>
+              <span className="tile-skill">
+                {c.skill ? SKILLS[c.skill].name : '—'}
+                {countLines(c.voice) > 0 && <span className="tile-voice">台詞{countLines(c.voice)}</span>}
+              </span>
             </button>
           ))}
         </div>

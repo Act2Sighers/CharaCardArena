@@ -8,6 +8,20 @@ import type { ElementId } from '../core/types';
 import { CardFace } from './CardFace';
 import { Crown } from './SkillPicker';
 
+interface Bubble {
+  key: number;
+  unit: UnitId;
+  side: Side;
+  text: string;
+  element: ElementId;
+  x: number;
+  y: number;
+  maxW: number;
+  tail: number;
+  /** 重なり判定用の見積もり範囲 */
+  box: { l: number; r: number; t: number; b: number };
+}
+
 interface Cutin {
   side: Side;
   name: string;
@@ -66,6 +80,10 @@ function delayAfter(ev: BattleEvent, next: BattleEvent | undefined): number {
       return ev.on ? 420 : 160;
     case 'leader':
       return 900;
+    case 'speak':
+      // 台詞の後は少しだけ間を空ける（吹き出し自体はその後もしばらく残る）
+      if (ev.timing === 'victory') return 1700;
+      return 520 + Math.min(40, ev.text.length) * 14;
     case 'evade':
       return 560;
     case 'damage':
@@ -108,6 +126,9 @@ export function BattleViewer({ teamA, teamB, events, onClose, live, favorite, on
   const [speed, setSpeed] = useState<Speed>(loadSpeed);
   const [showResult, setShowResult] = useState(false);
   const [cutin, setCutin] = useState<(Cutin & { key: number }) | null>(null);
+  const [bubbles, setBubbles] = useState<Bubble[]>([]);
+  const bubbleKey = useRef(0);
+  const bubbleTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const cutinKey = useRef(0);
   const cutinTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -187,7 +208,37 @@ export function BattleViewer({ teamA, teamB, events, onClose, live, favorite, on
   };
   useEffect(() => () => {
     if (cutinTimer.current) clearTimeout(cutinTimer.current);
+    bubbleTimers.current.forEach(clearTimeout);
   }, []);
+
+  /** 台詞の吹き出しを出す（同じカードの前の吹き出しは置き換える） */
+  const showBubble = (unitId: UnitId, side: Side, text: string, element: ElementId) => {
+    const el = cardEls.current.get(unitId);
+    const field = fieldRef.current;
+    if (!el || !field) return;
+    const r = el.getBoundingClientRect();
+    const f = field.getBoundingClientRect();
+    const fw = f.width;
+    const maxW = Math.min(250, fw * 0.74);
+    const center = r.left - f.left + r.width / 2;
+    const x = Math.min(fw - maxW / 2 - 6, Math.max(maxW / 2 + 6, center));
+    // 自分側はカードの上、相手側はカード（HPゲージ含む）の下に出し、盤面中央に向かって吹き出す
+    const y = side === 'A' ? r.top - f.top - 4 : r.bottom - f.top + 4;
+    const key = ++bubbleKey.current;
+    // 吹き出しの大きさを見積もり、重なる古い吹き出しは新しい台詞が出た時点で消す
+    const chars = Array.from(text).length;
+    const perLine = Math.max(4, Math.floor((maxW - 26) / 13.5));
+    const w = Math.min(maxW, chars * 13.5 + 26);
+    const h = Math.ceil(chars / perLine) * 19 + 18;
+    const box = { l: x - w / 2, r: x + w / 2, t: side === 'A' ? y - h : y, b: side === 'A' ? y : y + h };
+    const hit = (o: Bubble) => !(o.box.r < box.l || o.box.l > box.r || o.box.b < box.t || o.box.t > box.b);
+    setBubbles((bs) => [
+      ...bs.filter((o) => o.unit !== unitId && !hit(o)),
+      { key, unit: unitId, side, text, element, x, y, maxW, tail: center - x, box },
+    ]);
+    const dur = (1500 + Array.from(text).length * 85) / Math.min(speed, 2);
+    bubbleTimers.current.push(setTimeout(() => setBubbles((bs) => bs.filter((b) => b.key !== key)), dur));
+  };
 
   /** イベントの見た目の演出 */
   const visualize = (ev: BattleEvent, v: ViewState) => {
@@ -401,6 +452,11 @@ export function BattleViewer({ teamA, teamB, events, onClose, live, favorite, on
         }
         break;
       }
+      case 'speak': {
+        const u = unit(ev.unit);
+        showBubble(ev.unit, u.side, ev.text, u.snap.element);
+        break;
+      }
       case 'end':
         setTimeout(() => setShowResult(true), 400 / speed);
         break;
@@ -447,6 +503,7 @@ export function BattleViewer({ teamA, teamB, events, onClose, live, favorite, on
     fxRef.current?.clear();
     pendingFx.current = [];
     setCutin(null);
+    setBubbles([]);
     setView(v);
     setIdx(to);
     setShowResult(to >= events.length && !!v.ended);
@@ -572,6 +629,19 @@ export function BattleViewer({ teamA, teamB, events, onClose, live, favorite, on
             <div className="midline" aria-hidden="true"><span>VS</span></div>
             {renderSide('A', teamA)}
             <canvas ref={canvasRef} className="fx-canvas" aria-hidden="true" />
+            {bubbles.map((b) => (
+              <div
+                key={b.key}
+                className={`speech speech-${b.side.toLowerCase()}`}
+                style={{
+                  left: b.x, top: b.y, maxWidth: b.maxW,
+                  ['--el' as string]: ELEMENTS[b.element].color,
+                  ['--tail' as string]: `${b.tail}px`,
+                }}
+              >
+                <span className="speech-text">{b.text}</span>
+              </div>
+            ))}
             {cutin && (
               <div
                 key={cutin.key}

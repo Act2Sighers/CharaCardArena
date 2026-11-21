@@ -5,6 +5,7 @@ import { computeStats, STYLE_ORDER, STYLES, TACTIC_ORDER, TACTICS } from '../cor
 import { ElementBadge } from './CardFace';
 import { StatBars } from './common';
 import { Crown, skillKindLabel } from './SkillPicker';
+import { VK } from '../core/voice';
 
 export function RulesPage() {
   return (
@@ -94,6 +95,19 @@ export function RulesPage() {
             </div>
           ))}
         </div>
+      </section>
+
+      <section className="panel">
+        <h2 className="section-title">台詞</h2>
+        <p>
+          カードには、タイミングごとに3つまで台詞を登録できます（カード編集画面の「台詞を編集」から）。そのタイミングが来ると、登録した中から1つを選んで喋ります。
+          台詞を登録していないタイミングでは何も喋りません。また、喋る機会を取り合うのは台詞を登録しているカードだけです。
+        </p>
+        <p>
+          喋る頻度は「ちょっと（約{Math.round(VK.prob.low * 100)}%）」「そこそこ（約{Math.round(VK.prob.mid * 100)}%）」「たくさん（約{Math.round(VK.prob.high * 100)}%）」から選べます。
+          同じ瞬間に複数のカードが喋ろうとしたときは1人だけが喋ります。「戦闘開始時」と「戦闘勝利時」は、台詞があれば誰か1人が必ず喋ります。
+          台詞の抽選は戦闘の結果に一切影響しません。
+        </p>
       </section>
 
       <section className="panel">

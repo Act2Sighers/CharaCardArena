@@ -1,4 +1,5 @@
 import type { LeaderSkillId, SkillId } from './skills';
+import type { CardVoice, TimingId } from './voice';
 
 // ===== 基本データ型 =====
 
@@ -38,6 +39,8 @@ export interface Card {
   leaderSkill: LeaderSkillId;
   description: string;
   image: CardImage | null;
+  /** 台詞（未設定なら何も喋らない） */
+  voice?: CardVoice;
   createdAt: number;
   updatedAt: number;
 }
@@ -75,6 +78,8 @@ export interface UnitSnapshot {
   skill?: SkillId;
   leaderSkill?: LeaderSkillId;
   leader?: boolean;
+  /** 戦闘中だけ使う（履歴には保存しない） */
+  voice?: CardVoice;
 }
 
 export interface TeamSnapshot {
@@ -113,6 +118,7 @@ export type BattleEvent =
   | { t: 'revive'; unit: UnitId; source: UnitId; side: Side; slot: number; hp: number }
   | { t: 'buff'; unit: UnitId; buff: 'mimic' | 'invert'; on: boolean; element?: ElementId }
   | { t: 'leader'; unit: UnitId; skill: LeaderSkillId; on: boolean }
+  | { t: 'speak'; unit: UnitId; timing: TimingId; text: string }
   | { t: 'end'; winner: Side | 'draw'; reason: 'wipe' | 'timeout'; scoreA: number; scoreB: number };
 
 export type AttackTag = 'normal' | 'followup' | 'skill' | 'sweep' | 'counter' | 'assist';

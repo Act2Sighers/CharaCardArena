@@ -20,7 +20,18 @@ export function unitSnapshot(card: Card, leader = false): UnitSnapshot {
     skill: card.skill ?? DEFAULT_SKILL[card.style],
     leaderSkill: card.leaderSkill ?? DEFAULT_LEADER_SKILL,
     leader,
+    ...(card.voice ? { voice: card.voice } : {}),
   };
+}
+
+/** 履歴に保存するとき、台詞の登録内容は外す（発話した本文はイベントに残る） */
+export function stripVoices(team: TeamSnapshot): TeamSnapshot {
+  const strip = (u: UnitSnapshot | null) => {
+    if (!u) return u;
+    const { voice: _voice, ...rest } = u;
+    return rest;
+  };
+  return { ...team, front: team.front.map(strip), reserve: team.reserve.map((u) => strip(u)!) };
 }
 
 /** スキル未設定の古いカードに仮のスキルを補う */
@@ -231,7 +242,7 @@ export interface LogLine {
   index: number;
   text: string;
   side: Side | null;
-  tone: 'normal' | 'sub' | 'good' | 'bad' | 'system' | 'ko' | 'skill';
+  tone: 'normal' | 'sub' | 'good' | 'bad' | 'system' | 'ko' | 'skill' | 'speech';
 }
 
 const POS = ['左', '中央', '右'];
@@ -353,6 +364,9 @@ export function logLines(
         break;
       case 'ko':
         push(i, `${name(ev.unit)}は倒れた…`, sideOf(ev.unit), 'ko');
+        break;
+      case 'speak':
+        push(i, `${name(ev.unit)}：${ev.text}`, sideOf(ev.unit), 'speech');
         break;
       case 'end': {
         const pa = Math.round(ev.scoreA * 100);
